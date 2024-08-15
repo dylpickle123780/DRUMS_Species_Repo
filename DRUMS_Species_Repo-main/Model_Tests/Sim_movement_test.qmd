@@ -1,0 +1,136 @@
+---
+title: Simulated movement and JAGS
+subtitle: DRUMS 2024
+format: pdf
+whitespace: line
+author: Team Species Distribution
+date: today
+---
+
+# Generate data
+```{r generating data, warning = FALSE, message = FALSE}
+source("../Movement_Simulation/Movement_Sim.R")
+
+result = movement_sim_inhomogenous(n = 25, rho = 0.1, sigma = 80,true_b1 = 0.001,
+                                   true_b0 = -12.5, d = 2500, m = 100,true_b2 = 0.001)
+
+#generating random setup of cameras
+x = result$x
+y = result$y
+
+#cameras pointing outwards from middle
+list_x = c(-600, -300, 0, 300, 600)
+camera_x = rep(list_x, 5)
+camera_y = c(-600, -600, -600, -600, -600, 
+             -300, -300, -300, -300, -300, 
+             0, 0, 0, 0, 0, 
+             300, 300, 300, 300, 300, 
+             600, 600, 600, 600, 600)
+
+start_theta = runif(25,min = 0,max = 2*pi-1)
+end_theta = start_theta+1
+```
+
+# Plot and run camera detection
+```{r generating detections, warning=FALSE,message=FALSE}
+source("../Movement_Simulation/Camera_Sim.R")
+
+detection_mats = camera_sim(x, y, camera_x, camera_y, start_theta, end_theta, 
+                            psis = rep(8,length(camera_x)))
+
+source("../Movement_Simulation/Graphing_Movement.R")
+D = 2500
+
+graphing(x, y, D, camera_x, camera_y, start_theta, end_theta,
+         detection_mats,view_dist = 16)
+```
+
+# Turn into input data for jags
+```{r run model, warning=FALSE,message=FALSE}
+source("../Movement_Simulation/GenerateYN.R")
+
+source("../Model_Functions/JAGS_function.R")
+source("../Movement_Simulation/YAdN.R")
+
+source("../Model_Tests/summarize_sim.R")
+
+
+
+b1 = seq(-0.001,0.0009,length = 5)
+b0 = c(-8.05,-8.6,-9.55,-10.9,-12.65)
+
+num_sim = 100
+num_beta = 5
+b1_hat = matrix(nrow = num_sim,ncol = 5)
+
+temp <- vector(mode = "numeric", length = 3)
+means_lambda <- matrix(nrow = num_sim, ncol = num_beta)
+low_lambda <- matrix(nrow = num_sim, ncol = num_beta)
+up_lambda <- matrix(nrow = num_sim, ncol = num_beta)
+  
+x_lats = matrix(rep(c(-600, -600, -600, -600, -600, 
+               -300, -300, -300, -300, -300, 
+               0, 0, 0, 0, 0, 
+               300, 300, 300, 300, 300, 
+               600, 600, 600, 600, 600),each = 8),ncol = 25)
+#Run multiple times for different b1
+try(
+  for (j in 1:5){
+    b0_init = 0
+    b1_init = 0
+    for (i in 1:100){
+      set.seed(i*j)
+      
+      new_YN = gen_new_YN(n = 25, b1 = b1[j], b0 = b0[j],m = 100,
+                          rho = 0.4, sigma = 80,d = 2500)
+      
+      x = new_YN$X
+      y = new_YN$Y
+      
+      true_N = new_YN$N
+      true_Y = new_YN$true_Y
+      print(sum(true_N))
+      b1_hat_est = MCMC.jags.wrapper.given(x = x_lats, 
+                              S = 25, B = 8,
+                              max_dist = 16, true_N = true_N,
+                              Y = true_Y, m = 100, b1_init = b1[j])
+      
+      b1_hat[i,j] = mean(b1_hat_est)
+      
+      
+      temp = calc_metrics(b1_hat_est)
+      means_lambda[i,j] <- temp[1]
+      low_lambda[i,j] <- temp[2]
+      up_lambda[i,j] <- temp[3]
+    }
+  }
+)
+```
+
+```{r plot results, warning=FALSE, message=FALSE}
+lambda_stats <- matrix(nrow = nrow(means_lambda), ncol = 5)
+
+pretend_means_lambda = as.data.frame(means_lambda)
+plot_mult(pretend_means_lambda,b1)
+
+for(i in 1:5){
+  idx = i
+  true_lambda = b1[idx]
+  lambda_stats[, 1] <- seq(1:nrow(means_lambda))
+  lambda_stats[, 2] <- means_lambda[,idx]
+  lambda_stats[, 3] <- low_lambda[,idx]
+  lambda_stats[, 4] <- up_lambda[,idx]
+  lambda_stats[, 5] <- (lambda_stats[,3] <= true_lambda & lambda_stats[,4] >= true_lambda)
+  
+  colnames(lambda_stats) <- c("idx", "mean", "lower", "upper", "contains_true")
+  
+  print(ggplot(lambda_stats, aes(idx, mean)) + geom_point() +  
+    geom_errorbar(aes(ymin = lower, ymax = upper)) + theme_minimal() +
+    geom_hline(yintercept = b1[idx], color = "red", linewidth = 1.1) + 
+    ylab("Estimated b1") + xlab("") + 
+    theme(axis.text.x = element_blank()) + ggtitle("Credible Intervals"))
+  
+  prop_containing_mean(lambda_stats)
+}
+```
+

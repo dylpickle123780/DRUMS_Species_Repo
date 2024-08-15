@@ -1,0 +1,328 @@
+---
+title: Simulated movement and VanBayes
+subtitle: DRUMS 2024
+format: pdf
+whitespace: line
+author: Team Species Distribution
+date: today
+---
+
+# Source files
+```{r source, warning=FALSE, message=FALSE}
+library(spatstat)
+source("../Movement_Simulation/Movement_Sim.R")
+source("../Movement_Simulation/Camera_Sim.R")
+source("../Movement_Simulation/Graphing_Movement.R")
+source("../Movement_Simulation/GenerateYN.R")
+source("../Model_Functions/VanBayes_functions.R")
+source("../Movement_Simulation/Sequence_Metrics.R")
+source("../Movement_Simulation/sufficent_stats.R")
+```
+
+# Generate datasets
+```{r generating datasets, warning=FALSE, message=FALSE}
+require(doParallel)
+# Uncomment the following line to set a seed
+set.seed(seed_number)
+
+#Run multiple times for different b1
+num_datasets = 260000
+n_cam = 25
+num_bins = 4
+
+b0 = log(runif(num_datasets, 0, 20) / 1000000)
+b1 = rep(0, num_datasets)
+detect_psi = runif(num_datasets, 5, 15)
+theta = runif(num_datasets, 0, 0.5)
+sigma = runif(num_datasets, 100/3, 2000/3)
+tau = runif(num_datasets, 0.2, 5)
+rho = runif(num_datasets, 0.9999, 1)
+
+
+camera_x = as.numeric(cam_id_x)
+camera_y = as.numeric(cam_id_y)
+
+
+Y = list()
+
+reg_cores = makeCluster(7)
+registerDoParallel(reg_cores)
+
+library(plyr)
+library(foreach)
+
+
+tic = proc.time()[3]
+
+new_YN = gen_new_YN(b1 = b1[i], b0 = b0[i],m = 40000,
+                    rho = rho[i], sigma = sigma[i], 
+                    detect_psi = detect_psi[i],
+                    theta = theta[i], tau = tau[i],
+                    d = c(-1000,1000,1000,1000), camera_x = camera_x, camera_y = camera_y)
+
+toc = proc.time()[3]
+
+toc-tic
+
+Y = foreach (i = 1:num_datasets) %dopar% 
+
+{
+  new_YN = gen_new_YN(b1 = b1[i], b0 = b0[i],m = 360000,
+                      rho = rho[i], sigma = sigma[i], 
+                      detect_psi = detect_psi[i],
+                      theta = theta[i], tau = tau[i],
+                      d = 2500, camera_x = camera_x, camera_y = camera_y)
+  #print(new_YN)
+  Y[[i]] = new_YN
+  
+}
+
+lats = rep(c(-600, -600, -600, -600, -600, 
+               -300, -300, -300, -300, -300, 
+               0, 0, 0, 0, 0, 
+               300, 300, 300, 300, 300, 
+               600, 600, 600, 600, 600),num_datasets)
+
+max_dist = 25
+
+bin_size = rep(
+  (((seq(max_dist/num_bins,max_dist,length=num_bins))^2)/2) - 
+    (((seq(0,max_dist,length=num_bins+1))^2)/2)[-(num_bins+1)],
+  n_cam*num_datasets)
+
+stopCluster(cl = reg_cores)
+# save(Y,file = "Simulated_sets_clusters.Rdata")
+
+# rename Y to be unique (don't want to overwrite if we are merging)
+# I will call this GIVETHISANAME here, but let's communicate and keep changing it
+
+GIVETHISANAME <- list(Y = Y, b0 = b0, b1 = b1, tau = tau, theta = theta,
+                      sigma = sigma, rho = rho, detect_psi = detect_psi)
+
+
+# REMEMBER: GIVETHISANAME should have to change here, also change simulated_data1
+save(GIVETHISANAME, file = "simulated_dataGIVETHISANAME.RData")
+
+
+new_Y_test = matrix(nrow = num_datasets, ncol = (num_bins*n_cam) + 6 + num_bins)
+
+for(i in 1:(num_datasets)){
+  if(nrow(combined_data_final[[i]])==0){
+    new_Y_test[i,]=0
+    #new_Y_test[i,(1:(num_bins*n_cam))]=0
+  }
+  else{
+    bin_data = (gen_binned_data(final_data_matrix = combined_data_final[[i]],
+                         num_bins=num_bins, num_cams=n_cam, view_dist=max_dist))
+    cluster_sum = cluster_stat(combined_data_final[[i]])
+    sequences = gen_sequences(combined_data_final[[i]])
+    if(nrow(sequences)==0){
+      sigma_stat = c(NA,NA,NA,NA)
+    }
+    else{
+      sigma_stat = sigma_sum(final_detection_matrix = combined_data_final[[i]], 
+                             seq_matrix = sequences, camera_x=camera_x, 
+                             camera_y = camera_y)
+    }
+    bin_sum = bin_stat(bin_data)
+    col_vector = c(as.vector(bin_data), cluster_sum, sigma_stat, bin_sum)
+    new_Y_test[i,]=col_vector
+  }
+}
+
+combined_data_final = c(dyl123$Y, dyl234$Y, dyl333$Y, dyl345$Y, dyl444$Y, dyl888$Y, dyl716$Y, dyl720$Y)
+
+combined_data_beta = c(dyl123$b0, dyl234$b0, dyl333$b0, dyl345$b0, dyl444$b0, dyl888$b0, dyl716$b0,
+                       dyl720$b0)
+
+combined_data_theta = c(dyl123$theta, dyl234$theta, dyl333$theta, dyl345$theta, dyl444$theta, dyl888$theta, dyl716$theta, dyl720$theta)
+
+save(new_Y_test,file = "jacob_file_save.RData")
+Y0 = new_Y_test
+```
+
+```{r}
+# MISSPECIFIED BECAUSE OF MISSING COVARIATE
+
+# generate camera locations 
+list_x = c(-600, -300, 0, 300, 600)
+camera_x = rep(list_x, 5)
+camera_y = c(-600, -600, -600, -600, -600, 
+             -300, -300, -300, -300, -300, 
+             0, 0, 0, 0, 0, 
+             300, 300, 300, 300, 300, 
+             600, 600, 600, 600, 600)
+
+data_list <- list()
+num_deer_list <- list()
+
+for (i in 1:100){
+  
+  temp_data <- gen_new_YN(rho = 0.99995, sigma = 1000/3, b1 = 3, b0 = -12, 
+                                         m = 40000, d = c(-1000,1000,-1000,1000),
+                          camera_x = camera_x, camera_y = camera_y)
+  data_list[[i]] <- temp_data$true_Y
+  num_deer_list[[i]] <- temp_data$num_deer
+  print(i)
+}
+
+
+num_deer_list = unlist(num_deer_list)
+(mean((num_deer_list/4 - exp(post_mn)*1000000*(1+post_mn_theta))))
+```
+
+
+# Training deep learning model
+```{r training deep learning model, warning=FALSE, message=FALSE}
+Z     <- replace(Y0, is.na(Y0), 0) #summary statistic
+gamma <- combined_data_beta
+init  <- init_hetnorm(p=ncol(Z),L1=20,L2=20,
+                      init_mn=mean(gamma),init_sd=sd(gamma))
+
+model <- adam(w=init, x=Z, y=gamma, 
+              loss=loss_hetnorm, grad=grad_hetnorm,
+              lr = 0.0001,verbose=3)
+W     <- as.list(model$w)
+
+
+# Plot convergence
+plot(model$train_loss,xlab="Epoch",
+     type="l",ylab="Loss",col=1,
+     ylim=range(c(model$val_loss,model$train_loss),na.rm=TRUE))
+lines(model$val_loss,col=2)
+legend("topright",c("Training","Validation"),lty=1,col=1:2,bty="n")   
+```
+
+```{r}
+
+W = weights_260k$W_beta
+W2 = weights_260k$W_theta
+#set.seed(229)
+load("combined_data_list2.RData")
+n_cam = 25
+max_dist = 25
+nsims  <- 500   # Number of datasets for each value of beta1  
+nb1    <- 1     # Number of true beta1's to consider
+trueb0 <- c(-15, -14.5, -14, -13.5, -13)     # True intercept is always zero
+trueb1 <- c(-3, -1.5,0,1.5,3)
+num_bins = 4
+
+# bin_size = rep(
+#   (((seq(max_dist/num_bins,max_dist,length=num_bins))^2)/2) - 
+#     (((seq(0,max_dist,length=num_bins+1))^2)/2)[-(num_bins+1)],
+#   n_cam)
+max(sqrt(Y0[,1]^2+Y0[,2]^2))
+post_mn_theta <- post_sd_theta <- post_mn <- post_sd <- matrix(0,nsims,nb1)
+true_val_list = rep(0,nsims)
+
+seed <- 0
+for(sim in 1:nsims){for(j in 1:nb1){
+  #print(i,j)
+   seed = seed+1
+   set.seed(seed)
+   
+   # Y0_vals             <- (gen_new_YN(b1 = 3, b0 = -12, m = 40000,
+   #                    rho = 0.99995, sigma = 1000/3, d = c(-1000, 1000, -1000, 1000), 
+   #                    camera_x = camera_x, camera_y = camera_y, max_dist = max_dist)) # Generate a dataset
+   print(sim)
+   true_val = Y0_vals$num_deer
+   Y0 = Y0_vals$true_Y
+   
+   Y0_bin = (gen_binned_data(simulation_study[[sim]],num_bins=num_bins, num_cams=n_cam,
+                                      view_dist=max_dist))
+   #print("passed Y0 bins")
+   if(nrow(simulation_study[[sim]])==0){
+     Y0_cluster = c(0,0)
+   } else{
+     Y0_cluster = cluster_stat(simulation_study[[sim]])
+   }
+   
+   #print("cluster done")
+   Y0_seq = gen_sequences(simulation_study[[sim]])
+   #print("done seq")
+   if(nrow(Y0_seq)==0){
+     #print("in if")
+     Y0_sigma = c(0,0,0,0)
+   } else {
+     #print("in else")
+     Y0_sigma = sigma_sum(final_detection_matrix=simulation_study[[sim]],
+                          seq_matrix=Y0_seq,
+                        camera_x=camera_x,camera_y=camera_y)
+     #print(Y0_sigma)
+     
+   }
+   Y0_bin_stat = bin_stat(Y0_bin)
+   Z0 = c((as.vector(Y0_bin)),Y0_cluster,Y0_sigma, Y0_bin_stat)
+   
+   Z0
+   
+   fit            <- predict_hetnorm(W,Z0)# Apply the trained model
+   fit_theta            <- predict_hetnorm(W2,Z0)
+  
+   post_mn[sim,j] <- fit$mu               # Store the fitted mean and sd
+   post_sd[sim,j] <- fit$sigma 
+   
+   post_mn_theta[sim,j] <- fit_theta$mu               # Store the fitted mean and sd
+   post_sd_theta[sim,j] <- fit_theta$sigma
+   true_val_list[sim] = true_val
+}}
+
+final_simulation_study_results = list(mean = post_mn, sd = post_sd, theta = post_mn_theta,
+                                      theta_sd = post_sd_theta, order = c(10.2,10.4,10.6,20.4,5.4))
+
+save(final_simulation_study_results, file = "final_sim_study_results.RData")
+
+mean((true_val_list/4-exp(post_mn)*1000000*(1+post_mn_theta))^2)
+
+save(rho_misspecification,file = "Rho_misspec_results.RData")
+
+```
+
+```{r}
+simulation_study = c(data_list10_200, data_list10_400, data_list10_600, data_list20_400, data_list5_400)
+jacob_results_really_cool_4 = list(mean = post_mn,sd = post_sd, 
+                                   theta = post_mn_theta, theta_sd = post_sd_theta)
+
+plot(post_mn_theta)
+save(jacob_results_really_cool_4,file = "jacob_results_really_cool_4.RData")
+# Time for one dataset
+plot(post_sd_theta)
+plot(post_mn)
+boxplot(t(post_mn)~trueb1,outline=FALSE,xlab="True beta1",ylab="Posterior mean")
+
+boxplot(t(post_sd)~trueb1,outline=FALSE,xlab="True beta1",ylab="Posterior sd")
+colMeans(post_mn)
+# Coverage
+cov <- rep(0,nb1)
+for(j in 1:nb1){
+   cov[j] <- mean(abs(trueb1[j]-post_mn[,j])<1.96*post_sd[,j])
+}
+
+plot(trueb1,cov,xlab="True beta1",ylab="Coverage of 95% intervals") 
+print(cov)
+
+weights_260k = list(W_beta = W, W_theta = W2)
+save(weights_260k,file = "Weights_260k.RData")
+```
+
+
+```{r}
+library(ggplot2)
+temp = as.data.frame(post_mn)
+
+ggplot(temp) +
+  geom_boxplot(aes(x = -12, y = V1)) +
+  geom_boxplot(aes(x = -11, y = V2)) +
+  geom_boxplot(aes(x = -10, y = V3)) +
+  geom_boxplot(aes(x = -9, y = V4)) +
+  geom_boxplot(aes(x = -8, y = V5)) +
+  theme_minimal() + theme(axis.text.x = element_blank()) +
+    xlab("True beta1") + ylab("Posterior Mean") +
+    geom_segment(aes(x = -12.38, y = trueb1[1], xend = -11.62, yend = trueb1[1]), color = "red", size = 1.1)+
+    geom_segment(aes(x = -11.38, y = trueb1[2], xend = -10.62, yend = trueb1[2]), color = "red", size = 1.1)+
+    geom_segment(aes(x = -10.38, y = trueb1[3], xend = -9.62, yend = trueb1[3]), color = "red", size = 1.1)+
+    geom_segment(aes(x = -9.38, y = trueb1[4], xend = -8.62, yend = trueb1[4]), color = "red", size = 1.1)+
+    geom_segment(aes(x = -8.38, y = trueb1[5], xend = -7.62, yend = trueb1[5]), color = "red", size = 1.1)
+  
+```
+
